@@ -1,5 +1,9 @@
 # DisplaxTouch
 
+[![PlatformIO Registry](https://badges.registry.platformio.org/packages/kallaspriit/library/DisplaxTouch.svg)](https://registry.platformio.org/libraries/kallaspriit/DisplaxTouch)
+![License](https://img.shields.io/github/license/kallaspriit/DisplaxTouch)
+![Release](https://img.shields.io/github/v/release/kallaspriit/DisplaxTouch)
+
 Arduino / PlatformIO library for interfacing with **Displax touch controllers** over UART using the Arduino **Stream** API.
 
 - UART: **115200 baud, 8N1** (configure your serial port in your application).
