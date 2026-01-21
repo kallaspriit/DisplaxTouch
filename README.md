@@ -6,12 +6,9 @@
 
 Arduino / PlatformIO library for interfacing with **Displax touch controllers** over UART using the Arduino **Stream** API.
 
-- UART: **115200 baud, 8N1** (configure your serial port in your application).
-- Portable: works with `HardwareSerial`, RP2040 PIO UART wrappers, USB CDC serials, and many SoftwareSerial-style ports (as long as they implement `Stream`).
-
 ## Features
 
-- Works with any `Stream`-compatible serial transport.
+- Portable: works with `HardwareSerial`, RP2040 PIO UART wrappers, USB CDC serials, and many SoftwareSerial-style ports (as long as they implement `Stream`).
 - Simple event callbacks for touch data, state changes, and logging.
 - Normalized coordinates are easy to compute from the reported frame size.
 - Arduino and PlatformIO friendly.
@@ -19,15 +16,15 @@ Arduino / PlatformIO library for interfacing with **Displax touch controllers** 
 ## Requirements
 
 - A Displax touch controller configured for UART output (tested with Displax M64 controller).
-- One UART (or `Stream`-compatible) port at **115200 baud, 8N1**.
+- One UART (or `Stream` compatible) port at **115200 baud**.
 
 ## Wiring guide
 
 Example pinout guide for Raspberry Pi Pico but similar approach with different pin numbers should work on other microcontrollers.
 
-On the Arduino-Pico core, `Serial1` maps to `UART0` on `GP0/GP1`. Any `Stream`-compatible UART will work.
+On the Arduino-Pico core, `Serial1` maps to `UART0` on `GP0/GP1`. Any `Stream` compatible UART will work.
 
-Displax controller `RX` should be connected to MCU `TX` and vice versa.
+Displax controller `RX` pin should be connected to MCU `TX` and vice versa.
 
 | Controller | MCU (Pico example)                    |
 | ---------- | ------------------------------------- |
@@ -91,7 +88,7 @@ Touch id: 0, x: 0.57 y: 0.51, width: 63, height: 63, pressure: 254
 ## Notes
 
 - Call `touch.loop()` regularly to process incoming data.
-- Use `setLogCallback` to capture info/warn messages if you want visibility into protocol events.
+- Optionally use `setLogCallback` to capture info/warn messages if you want visibility into protocol events.
 
 ## Installation
 
