@@ -1,4 +1,4 @@
-#include "DisplaxTouch.hpp"
+#include "DisplaxTouch.h"
 
 #include <cstdarg>
 #include <cstdio>
