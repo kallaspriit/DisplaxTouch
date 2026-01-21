@@ -1,0 +1,28 @@
+{
+  "name": "DisplaxTouch",
+  "version": "1.0.0",
+  "description": "UART/Stream driver for Displax touch controllers for Arduino and PlatformIO.",
+  "keywords": [
+    "displax",
+    "touch",
+    "controller",
+    "zeeto",
+    "touchscreen",
+    "arduino",
+    "platformio"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kallaspriit/DisplaxTouch.git"
+  },
+  "authors": [
+    {
+      "name": "Priit Kallas",
+      "email": "kallaspriit@gmail.com",
+      "maintainer": true
+    }
+  ],
+  "frameworks": "*",
+  "platforms": "*"
+}

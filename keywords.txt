@@ -1,0 +1,56 @@
+#######################################
+# Syntax Coloring Map For DisplaxTouch
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+DisplaxTouch        KEYWORD1
+TouchPoint          KEYWORD1
+TouchFrame          KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+begin               KEYWORD2
+update              KEYWORD2
+reset               KEYWORD2
+
+setLogCallback      KEYWORD2
+setFrameCallback    KEYWORD2
+
+isConnected         KEYWORD2
+getFrameWidth       KEYWORD2
+getFrameHeight      KEYWORD2
+
+idToHex             KEYWORD2
+bufferToHex         KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+MAX_TOUCH_POINTS    LITERAL1
+
+#######################################
+# Enum types (KEYWORD1)
+#######################################
+
+DisplaxPacketType   KEYWORD1
+
+#######################################
+# Enum values (LITERAL1)
+#######################################
+
+Status              LITERAL1
+Frame               LITERAL1
+Unknown             LITERAL1
+
+#######################################
+# Notes
+# - KEYWORD1: types (classes, structs, enums)
+# - KEYWORD2: public methods
+# - LITERAL1: constants and enum values
+#######################################
