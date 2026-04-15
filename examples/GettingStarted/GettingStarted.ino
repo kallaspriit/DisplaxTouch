@@ -1,4 +1,4 @@
-#include <DisplaxTouch.hpp>
+#include <DisplaxTouch.h>
 
 DisplaxTouch touch(Serial1);
 

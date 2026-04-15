@@ -7,8 +7,9 @@
 const uint32_t DisplaxTouch::CRC32_TABLE[16] = {
     0x00000000, 0x04C11DB7, 0x09823B6E, 0x0D4326D9, 0x130476DC, 0x17C56B6B, 0x1A864DB2, 0x1E475005, 0x2608EDB8, 0x22C9F00F, 0x2F8AD6D6, 0x2B4BCB61, 0x350C9B64, 0x31CD86D3, 0x3C8EA00A, 0x384FBDBD};
 
-DisplaxTouch::DisplaxTouch(Stream& stream)
-    : stream(stream) {
+DisplaxTouch::DisplaxTouch(Stream& stream, TouchOrientation orientation)
+    : stream(stream)
+    , orientation(orientation) {
     // Initialize RX buffer
     memset(rxBuffer, 0, sizeof(rxBuffer));
 }
@@ -29,16 +30,25 @@ void DisplaxTouch::begin() {
 }
 
 void DisplaxTouch::loop() {
+    unsigned long currentTimeMs = millis();
+
     // Check for initialization timeout
     if (state == TouchState::INITIALIZING && initializingStartTimeMs > 0) {
-        unsigned long currentMs = millis();
-
-        if (currentMs - initializingStartTimeMs >= INITIALIZATION_TIMEOUT_MS) {
+        if (currentTimeMs - initializingStartTimeMs >= INITIALIZATION_TIMEOUT_MS) {
             warn("Initialization timeout - no response from sensor in %lu ms", INITIALIZATION_TIMEOUT_MS);
             setState(TouchState::INITIALIZATION_FAILED);
 
             // Reset to prevent repeated failures
             initializingStartTimeMs = 0;
+        }
+    }
+
+    // Clear touches on timeout (sensor only sends touch events when touched)
+    if (touchCount > 0 && !isTouchTimeoutFired && lastTouchTimeMs > 0) {
+        if (currentTimeMs - lastTouchTimeMs >= touchTimeoutMs) {
+            clearTouches();
+
+            isTouchTimeoutFired = true;
         }
     }
 
@@ -158,14 +168,21 @@ uint32_t DisplaxTouch::calculateCRC32(const uint8_t* data, size_t length) {
     return crc;
 }
 
-bool DisplaxTouch::verifyCRC(const uint8_t* frame) {
+bool DisplaxTouch::verifyTouchCRC(const uint8_t* frame) {
     // Calculate CRC over header + payload (68 bytes)
     uint32_t calculatedCrc = calculateCRC32(frame, TOUCH_REPORT_SIZE - TOUCH_CRC_SIZE);
 
     // Extract stored CRC from frame (little-endian, bytes 68-71)
     uint32_t storedCrc = static_cast<uint32_t>(frame[68]) | (static_cast<uint32_t>(frame[69]) << 8) | (static_cast<uint32_t>(frame[70]) << 16) | (static_cast<uint32_t>(frame[71]) << 24);
 
-    return calculatedCrc == storedCrc;
+    bool isCrcValid = (calculatedCrc == storedCrc);
+
+    if (!isCrcValid) {
+        warn("CRC mismatch: calculated %s, stored %s", idToHex(calculatedCrc, 8).c_str(), idToHex(storedCrc, 8).c_str());
+        log("%s", bufferToHex(frame, TOUCH_REPORT_SIZE, "Touch frame").c_str());
+    }
+
+    return isCrcValid;
 }
 
 void DisplaxTouch::sendReset() {
@@ -221,19 +238,11 @@ void DisplaxTouch::setState(TouchState newState) {
 }
 
 void DisplaxTouch::readStreamData() {
-    static size_t lastRxBufferPos = 0;
-
-    // Read all available data into RX buffer first (batch reading)
+    // Drain everything currently waiting on the UART into the RX buffer in one batch. Reading a byte at a time across
+    // multiple loop() iterations would race the sensor's frame cadence and risk losing bytes to UART overrun.
     while (stream.available() && rxBufferSize < RX_BUFFER_SIZE) {
         rxBuffer[rxBufferSize++] = stream.read();
     }
-
-    // Log buffer if new data received (verbose, enable only for debugging)
-    // if (rxBufferSize != lastRxBufferPos) {
-    //     Stream.println(bufferToHex(rxBuffer, rxBufferSize, "RX Buffer"));
-
-    //     lastRxBufferPos = rxBufferSize;
-    // }
 
     // Buffer overflow protection
     if (rxBufferSize >= RX_BUFFER_SIZE) {
@@ -351,9 +360,7 @@ void DisplaxTouch::processTouchReport(uint8_t* data, size_t length) {
     }
 
     // Verify CRC integrity
-    if (!verifyCRC(data)) {
-        warn("CRC mismatch, re-synchronizing");
-
+    if (!verifyTouchCRC(data)) {
         consumeBuffer(1);
         setState(TouchState::SYNCHRONIZING);
 
@@ -370,12 +377,16 @@ void DisplaxTouch::processTouchReport(uint8_t* data, size_t length) {
     // - touchCount: 1 byte at offset 61
     // - scanTime: 2 bytes at offset 62-63
     uint8_t reportedTouchCount = payload[61];
+
+    // Note: official Displax documentation puts Actual Count at offset 62 and Scan Time at 63-64, but on-the-wire
+    // testing showed everything is shifted one byte earlier (likely a 1-based vs 0-based indexing mismatch in the
+    // vendor docs).
     scanTime = static_cast<uint16_t>(payload[62]) | (static_cast<uint16_t>(payload[63]) << 8);
 
     // Parse and store active touches
     touchCount = 0;
 
-    for (size_t touchIndex = 0; touchIndex < reportedTouchCount && touchIndex < MAX_TOUCH_CONTACTS; touchIndex++) {
+    for (size_t touchIndex = 0; touchIndex < reportedTouchCount && touchIndex < MAX_TOUCHES; touchIndex++) {
         const uint8_t* touchData = &payload[1 + touchIndex * 10];
         uint8_t touchStatus = touchData[0];
 
@@ -384,17 +395,62 @@ void DisplaxTouch::processTouchReport(uint8_t* data, size_t length) {
             continue;
         }
 
-        // Store active touch point
+        // Extract raw sensor values
+        uint16_t rawX = static_cast<uint16_t>(touchData[2]) | (static_cast<uint16_t>(touchData[3]) << 8);
+        uint16_t rawY = static_cast<uint16_t>(touchData[4]) | (static_cast<uint16_t>(touchData[5]) << 8);
+        uint8_t rawWidth = touchData[6];
+        uint8_t rawHeight = touchData[7];
+
+        // Store active touch point with orientation transformation applied
         TouchPoint& point = touches[touchCount++];
         point.id = touchData[1];
-        point.x = static_cast<uint16_t>(touchData[2]) | (static_cast<uint16_t>(touchData[3]) << 8);
-        point.y = static_cast<uint16_t>(touchData[4]) | (static_cast<uint16_t>(touchData[5]) << 8);
-        point.width = touchData[6];
-        point.height = touchData[7];
         point.pressure = static_cast<uint16_t>(touchData[8]) | (static_cast<uint16_t>(touchData[9]) << 8);
         point.active = true;
-        point.frameWidth = frameWidth;
-        point.frameHeight = frameHeight;
+
+        // Apply coordinate transformation based on orientation
+        switch (orientation) {
+            case TouchOrientation::DEGREES_0:
+                point.x = rawX;
+                point.y = rawY;
+                point.width = rawWidth;
+                point.height = rawHeight;
+                point.frameWidth = frameWidth;
+                point.frameHeight = frameHeight;
+                break;
+
+            case TouchOrientation::DEGREES_90:
+                point.x = frameHeight - rawY;
+                point.y = rawX;
+                point.width = rawHeight;
+                point.height = rawWidth;
+                point.frameWidth = frameHeight;
+                point.frameHeight = frameWidth;
+                break;
+
+            case TouchOrientation::DEGREES_180:
+                point.x = frameWidth - rawX;
+                point.y = frameHeight - rawY;
+                point.width = rawWidth;
+                point.height = rawHeight;
+                point.frameWidth = frameWidth;
+                point.frameHeight = frameHeight;
+                break;
+
+            case TouchOrientation::DEGREES_270:
+                point.x = rawY;
+                point.y = frameWidth - rawX;
+                point.width = rawHeight;
+                point.height = rawWidth;
+                point.frameWidth = frameHeight;
+                point.frameHeight = frameWidth;
+                break;
+        }
+    }
+
+    // Track touch timing for timeout detection
+    if (touchCount > 0) {
+        lastTouchTimeMs = millis();
+        isTouchTimeoutFired = false;
     }
 
     // Notify all registered listeners
@@ -475,10 +531,22 @@ bool DisplaxTouch::isTouched() const {
 }
 
 uint16_t DisplaxTouch::getFrameWidth() const {
+    // For 90/270 degree rotations the visible width and height are swapped relative to the raw sensor frame. This
+    // matches the per-touch frameWidth/frameHeight values populated in processTouchReport, so consumers can divide
+    // point.x by getFrameWidth() to get a normalized 0..1 coordinate regardless of orientation.
+    if (orientation == TouchOrientation::DEGREES_90 || orientation == TouchOrientation::DEGREES_270) {
+        return frameHeight;
+    }
+
     return frameWidth;
 }
 
 uint16_t DisplaxTouch::getFrameHeight() const {
+    // See getFrameWidth() for the 90/270 swap rationale
+    if (orientation == TouchOrientation::DEGREES_90 || orientation == TouchOrientation::DEGREES_270) {
+        return frameWidth;
+    }
+
     return frameHeight;
 }
 
@@ -488,8 +556,34 @@ void DisplaxTouch::setFrameSize(uint16_t width, uint16_t height) {
     log("Frame size manually set to %u x %u", frameWidth, frameHeight);
 }
 
+void DisplaxTouch::setOrientation(TouchOrientation newOrientation) {
+    orientation = newOrientation;
+}
+
+TouchOrientation DisplaxTouch::getOrientation() const {
+    return orientation;
+}
+
+void DisplaxTouch::setTouchTimeout(unsigned long timeoutMs) {
+    touchTimeoutMs = timeoutMs;
+}
+
+unsigned long DisplaxTouch::getTouchTimeout() const {
+    return touchTimeoutMs;
+}
+
 void DisplaxTouch::clearTouches() {
     touchCount = 0;
+
+    // Clear all touch point state
+    for (size_t i = 0; i < MAX_TOUCHES; i++) {
+        touches[i] = TouchPoint {};
+    }
+
+    // Notify all listeners that touches have been cleared
+    for (uint8_t listenerIndex = 0; listenerIndex < listenerCount; listenerIndex++) {
+        listeners[listenerIndex](touches, 0);
+    }
 }
 
 int DisplaxTouch::addTouchListener(TouchCallback callback) {
@@ -566,7 +660,7 @@ void DisplaxTouch::warn(const char* format, ...) {
     logCallback(TouchLogLevel::Warn, buffer);
 }
 
-inline String DisplaxTouch::getCommandName(Command command) {
+String DisplaxTouch::getCommandName(Command command) {
     switch (command) {
         case Command::RESET:
             return "RESET";
@@ -603,7 +697,7 @@ inline String DisplaxTouch::getCommandName(Command command) {
     }
 }
 
-inline String DisplaxTouch::getStateName(TouchState state) {
+String DisplaxTouch::getStateName(TouchState state) {
     switch (state) {
         case TouchState::DISCONNECTED:
             return "DISCONNECTED";
@@ -628,14 +722,19 @@ inline String DisplaxTouch::getStateName(TouchState state) {
     }
 }
 
-inline String DisplaxTouch::idToHex(unsigned long id) {
-    char buffer[7];
-    snprintf(buffer, sizeof(buffer), "0x%04X", id);
+String DisplaxTouch::idToHex(unsigned long id, uint8_t length) {
+    // Fixed buffer sized for the worst case ("0x" + 16 hex digits + null = 19 bytes, rounded up). Avoids a VLA which
+    // is a non-standard C++ extension.
+    char buffer[24];
+    char format[8];
+
+    snprintf(format, sizeof(format), "0x%%0%dX", length);
+    snprintf(buffer, sizeof(buffer), format, id);
 
     return String(buffer);
 }
 
-inline String DisplaxTouch::bufferToHex(const uint8_t* buffer, uint8_t length, String name) {
+String DisplaxTouch::bufferToHex(const uint8_t* buffer, uint8_t length, const String& name) {
     if (length == 0 || buffer == nullptr) {
         return "n/a";
     }

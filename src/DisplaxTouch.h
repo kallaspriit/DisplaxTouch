@@ -4,6 +4,19 @@
 #include <functional>
 
 /**
+ * Touch sensor orientation for coordinate transformation.
+ *
+ * Use this to compensate when the sensor is physically mounted in a rotated position.
+ * Rotation is clockwise relative to the default sensor orientation.
+ */
+enum class TouchOrientation {
+    DEGREES_0,   ///< No rotation (default orientation)
+    DEGREES_90,  ///< Sensor rotated 90° clockwise
+    DEGREES_180, ///< Sensor rotated 180°
+    DEGREES_270  ///< Sensor rotated 270° clockwise (90° counter-clockwise)
+};
+
+/**
  * Represents a single touch point from the Displax touch sensor.
  *
  * Contains position, size, pressure information and frame dimensions for coordinate normalization.
@@ -47,18 +60,22 @@ using TouchLogCallback = std::function<void(TouchLogLevel level, const char* mes
 /**
  * Touch sensor connection and synchronization state.
  *
- * State machine progression:
- * DISCONNECTED → INITIALIZING → CONNECTED → SYNCHRONIZING → SYNCHRONIZED
+ * Happy-path progression (driven by responses to commands sent from begin()):
+ *   DISCONNECTED -> INITIALIZING -> CONNECTED -> SYNCHRONIZED
  *
- * Or on error:
- * INITIALIZING → INITIALIZATION_FAILED (timeout after 1000ms)
+ * Initialization timeout:
+ *   INITIALIZING -> INITIALIZATION_FAILED (no RESET response within 1000ms)
+ *
+ * Error recovery (entered when a touch frame fails CRC, has bad header, exceeds buffer, or an unknown report ID is
+ * seen on the wire):
+ *   <any> -> SYNCHRONIZING -> SYNCHRONIZED (after the next valid frame header is found)
  */
 enum class TouchState {
-    DISCONNECTED,          // Initial state before begin() called
-    INITIALIZING,          // Waiting for RESET response from sensor
-    INITIALIZATION_FAILED, // No response from sensor within timeout period
-    CONNECTED,             // Sensor responded to RESET, initialization complete
-    SYNCHRONIZING,         // Searching for frame header (error recovery mode)
+    DISCONNECTED,          // Initial state before begin() is called
+    INITIALIZING,          // Waiting for the RESET response from the sensor
+    INITIALIZATION_FAILED, // No response from the sensor within the timeout window
+    CONNECTED,             // Sensor responded to RESET, initialization sequence in progress
+    SYNCHRONIZING,         // Error recovery: searching for the next valid frame header
     SYNCHRONIZED,          // Processing touch frames normally
 };
 
@@ -77,18 +94,18 @@ enum class TouchState {
  * Example usage:
  *
  * @code
- * DisplaxTouch touch(Stream2);
+ * DisplaxTouch touch(Serial2);
  *
  * void setup() {
  *     touch.setStateChangeCallback([](TouchState newState, TouchState previousState) {
  *         if (newState == TouchState::CONNECTED) {
- *             Stream.println("Touch sensor connected");
+ *             Serial.println("Touch sensor connected");
  *         }
  *     });
  *
  *     touch.addTouchListener([](const TouchPoint* touches, uint8_t count) {
  *         for (uint8_t i = 0; i < count; i++) {
- *             Stream.printf("Touch %d at (%d, %d)\n", touches[i].id, touches[i].x, touches[i].y);
+ *             Serial.printf("Touch %d at (%d, %d)\n", touches[i].id, touches[i].x, touches[i].y);
  *         }
  *     });
  *
@@ -113,9 +130,10 @@ class DisplaxTouch {
     /**
      * Constructs a DisplaxTouch instance.
      *
-     * @param stream Stream (usually HardwareStream) for communication with touch sensor
+     * @param stream Serial stream (usually HardwareSerial) for communication with the touch sensor.
+     * @param orientation Sensor orientation for coordinate transformation (default: DEGREES_0).
      */
-    DisplaxTouch(Stream& stream);
+    DisplaxTouch(Stream& stream, TouchOrientation orientation = TouchOrientation::DEGREES_0);
 
     /**
      * Initializes the touch sensor and starts the connection sequence.
@@ -246,6 +264,38 @@ class DisplaxTouch {
      */
     void setFrameSize(uint16_t width, uint16_t height);
 
+    /**
+     * Sets the sensor orientation for coordinate transformation.
+     *
+     * @param orientation New orientation value
+     */
+    void setOrientation(TouchOrientation orientation);
+
+    /**
+     * Gets the current sensor orientation.
+     *
+     * @return Current orientation value
+     */
+    TouchOrientation getOrientation() const;
+
+    /**
+     * Sets the touch release timeout.
+     *
+     * When no touch frames are received within this period after active touches,
+     * the library will automatically clear touches and notify listeners with count=0.
+     * This enables proper touch-up detection.
+     *
+     * @param timeoutMs Timeout in milliseconds (default: 200ms)
+     */
+    void setTouchTimeout(unsigned long timeoutMs);
+
+    /**
+     * Gets the current touch release timeout.
+     *
+     * @return Timeout in milliseconds
+     */
+    unsigned long getTouchTimeout() const;
+
   private:
     /**
      * Displax UART protocol command codes.
@@ -259,8 +309,8 @@ class DisplaxTouch {
         GET_HID_REPORT_DESCRIPTION = 0x0002, // Request HID report descriptor
         GET_FRAME_SIZE = 0x0003,             // Request sensor frame dimensions
         TOUCH_REPORT_ID = 0x0004,            // Touch frame report ID (incoming data)
-        ENABLE_REPORTING = 0x0005,           // Enable touch event Streaming
-        DISABLE_REPORTING = 0x0006,          // Disable touch event Streaming
+        ENABLE_REPORTING = 0x0005,           // Enable touch event streaming
+        DISABLE_REPORTING = 0x0006,          // Disable touch event streaming
         RESET_RESPONSE = 0x226E,             // Reset command response ID
         DISABLE_USB_REPORTING = 0xFF00,      // Disable USB touch reporting
         ENABLE_USB_REPORTING = 0xFF01,       // Enable USB touch reporting
@@ -274,11 +324,11 @@ class DisplaxTouch {
     static constexpr size_t GET_HID_REPORT_DESCRIPTION_SIZE = 708;   // HID report descriptor response size
     static constexpr size_t GET_FRAME_SIZE_SIZE = 6;                 // Frame size response size
     static constexpr size_t TOUCH_PAYLOAD_SIZE = 64;                 // Touch report payload size
-    static constexpr size_t MAX_TOUCH_CONTACTS = 6;                  // Maximum touch contacts in protocol
-    static constexpr size_t MAX_TOUCHES = 6;                         // Maximum simultaneous touch points supported
+    static constexpr size_t MAX_TOUCHES = 6;                         // Maximum simultaneous touch points supported by the protocol
     static constexpr size_t MAX_LISTENERS = 4;                       // Maximum number of touch event listeners
     static constexpr size_t LOG_BUFFER_SIZE = 128;                   // Log message buffer size
     static constexpr unsigned long INITIALIZATION_TIMEOUT_MS = 1000; // Sensor initialization timeout
+    static constexpr unsigned long DEFAULT_TOUCH_TIMEOUT_MS = 50;    // Default touch release timeout
 
     // CRC32 lookup table for nibble-based calculation (Ethernet polynomial 0x04C11DB7)
     static const uint32_t CRC32_TABLE[16];
@@ -294,6 +344,7 @@ class DisplaxTouch {
     uint8_t touchCount = 0;                      // Current number of active touches
     uint16_t frameWidth = 1050;                  // Sensor frame width (default 1050mm)
     uint16_t frameHeight = 650;                  // Sensor frame height (default 650mm)
+    TouchOrientation orientation;                // Sensor orientation for coordinate transformation
     TouchCallback listeners[MAX_LISTENERS] = {}; // Array of registered touch listeners
     uint8_t listenerCount = 0;                   // Number of registered listeners
     int listenerIds[MAX_LISTENERS] = {};         // Unique IDs for registered listeners
@@ -304,8 +355,11 @@ class DisplaxTouch {
     TouchLogCallback logCallback = nullptr;            // Log message callback
 
     // Timing
-    unsigned long initializingStartTimeMs = 0; // Initialization start time for timeout detection
-    unsigned long scanTime = 0;                // Last reported scan time
+    unsigned long initializingStartTimeMs = 0;               // Initialization start time for timeout detection
+    uint16_t scanTime = 0;                                   // Last reported scan time (sensor wire format is uint16_t)
+    unsigned long lastTouchTimeMs = 0;                       // Time of last touch report with active touches
+    unsigned long touchTimeoutMs = DEFAULT_TOUCH_TIMEOUT_MS; // Touch release timeout
+    bool isTouchTimeoutFired = true;                         // Whether timeout callback has been fired
 
     //==========================================================================
     // Logging
@@ -425,7 +479,7 @@ class DisplaxTouch {
      * @param frame Complete 72-byte touch frame
      * @return True if calculated CRC matches stored CRC in frame
      */
-    bool verifyCRC(const uint8_t* frame);
+    bool verifyTouchCRC(const uint8_t* frame);
 
     //==========================================================================
     // Data Processing
@@ -530,36 +584,37 @@ class DisplaxTouch {
     //==========================================================================
 
     /**
-     * Converts command code to human-readable name.
+     * Converts a command code to a human-readable name.
      *
-     * @param command Command code
-     * @return Command name as String
+     * @param command Command code.
+     * @return Command name as String.
      */
-    static inline String getCommandName(Command command);
+    static String getCommandName(Command command);
 
     /**
-     * Converts touch state to human-readable name.
+     * Converts a touch state to a human-readable name.
      *
-     * @param state Touch state value
-     * @return State name as String
+     * @param state Touch state value.
+     * @return State name as String.
      */
-    static inline String getStateName(TouchState state);
+    static String getStateName(TouchState state);
 
     /**
-     * Converts numeric ID to hex string.
+     * Converts a number to a hexadecimal string representation (e.g. 0x0A, 0x00FF).
      *
-     * @param id Numeric value
-     * @return Hex string (e.g., "0x0004")
+     * @param id The number to convert.
+     * @param length The minimum number of hex digits (default 4, max 16 since unsigned long is at most 64 bits).
+     * @return Hexadecimal string.
      */
-    static inline String idToHex(unsigned long id);
+    static String idToHex(unsigned long id, uint8_t length = 4);
 
     /**
-     * Converts buffer to hex dump string for debugging.
+     * Converts a buffer to a hex dump string for debugging.
      *
-     * @param buffer Data buffer
-     * @param length Length of buffer
-     * @param name Optional name prefix
-     * @return Hex dump string
+     * @param buffer Data buffer.
+     * @param length Length of buffer.
+     * @param name Optional name prefix.
+     * @return Hex dump string.
      */
-    static inline String bufferToHex(const uint8_t* buffer, uint8_t length, String name = "");
+    static String bufferToHex(const uint8_t* buffer, uint8_t length, const String& name = "");
 };

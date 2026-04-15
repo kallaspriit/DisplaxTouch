@@ -36,38 +36,62 @@ Displax controller `RX` pin should be connected to MCU `TX` and vice versa.
 ## Quick start
 
 ```cpp
-#include <DisplaxTouch.hpp>
+#include <DisplaxTouch.h>
 
 DisplaxTouch touch(Serial1);
 
 void setup() {
-  Serial1.begin(115200);
+    // Setup serial port
+    Serial1.begin(115200);
 
-  touch.setStateChangeCallback([](TouchState newState, TouchState previousState) {
-    if (newState == TouchState::CONNECTED) {
-      Serial.println("Touch sensor connected");
-    }
-  });
+    // Enable optional logging
+    touch.setLogCallback([](TouchLogLevel level, const char* message) {
+        if (level == TouchLogLevel::Info) {
+            Serial.println(String("INFO: ") + message);
+        } else {
+            Serial.println(String("WARN: ") + message);
+        }
+    });
 
-  touch.addTouchListener([](const TouchPoint* points, uint8_t count) {
-    for (uint8_t i = 0; i < count; i++) {
-      const TouchPoint& p = points[i];
-      float x = static_cast<float>(p.x) / static_cast<float>(p.frameWidth);
-      float y = static_cast<float>(p.y) / static_cast<float>(p.frameHeight);
-      Serial.print("id=");
-      Serial.print(static_cast<int>(p.id));
-      Serial.print(" x=");
-      Serial.print(x);
-      Serial.print(" y=");
-      Serial.println(y);
-    }
-  });
+    // Monitor state changes for connection detection
+    touch.setStateChangeCallback([](TouchState newState, TouchState previousState) {
+        if (newState == TouchState::CONNECTED) {
+            Serial.println("Touch sensor connected");
+        } else if (newState == TouchState::INITIALIZATION_FAILED) {
+            Serial.println("Touch sensor failed to initialize");
+        }
+    });
 
-  touch.begin();
+    // Log touch events
+    touch.addTouchListener([](const TouchPoint* touchPoints, uint8_t count) {
+        for (uint8_t i = 0; i < count; i++) {
+            const TouchPoint& touchPoint = touchPoints[i];
+
+            float normalizedX = static_cast<float>(touchPoint.x) / static_cast<float>(touchPoint.frameWidth);
+            float normalizedY = static_cast<float>(touchPoint.y) / static_cast<float>(touchPoint.frameHeight);
+
+            Serial.print("Touch id: ");
+            Serial.print(static_cast<int>(touchPoint.id));
+            Serial.print(", x: ");
+            Serial.print(normalizedX);
+            Serial.print(" y: ");
+            Serial.print(normalizedY);
+            Serial.print(", width: ");
+            Serial.print(static_cast<int>(touchPoint.width));
+            Serial.print(", height: ");
+            Serial.print(static_cast<int>(touchPoint.height));
+            Serial.print(", pressure: ");
+            Serial.println(touchPoint.pressure);
+        }
+    });
+
+    // Initialize the touch sensor
+    touch.begin();
 }
 
 void loop() {
-  touch.loop();
+    // Process touch events
+    touch.loop();
 }
 ```
 

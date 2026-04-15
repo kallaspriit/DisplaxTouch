@@ -1,6 +1,6 @@
 {
   "name": "DisplaxTouch",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "UART/Stream driver for Displax touch controllers for Arduino and PlatformIO.",
   "keywords": [
     "displax",
